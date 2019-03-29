@@ -1,0 +1,345 @@
+---
+title: "IST_585_Project"
+author: "Randall Lueck"
+date: "September 16, 2018"
+output: word_document
+---
+SECTION 1: Data Preparation 
+```{r}
+### IMPORT THE CORRECT LIBRARIES AND GET THE DOCUMENTS ###
+library(Matrix)
+library(mclust)
+library(ggplot2)
+library(tidytext)
+library(corpus)
+library(dplyr)
+library(stringr)
+library(tm)
+
+#Import the text files
+sb <- 'C:/Users/Randy/Documents/Syracuse/iSchool/IST565/Homework/Project/Works/shake_and_bake.txt'
+sb <- readLines(sb, encoding = "UTF-8")  #docs with shakespeare and bacon only
+
+sv <- 'C:/Users/Randy/Documents/Syracuse/iSchool/IST565/Homework/Project/Works/shakes_vere.txt'
+sv <- readLines(sv, encoding = "UTF-8")  #docs with shakespeare and de vere only
+
+svb <- 'C:/Users/Randy/Documents/Syracuse/iSchool/IST565/Homework/Project/Works/all_works_sonnets.txt'
+svb <- readLines(svb, encoding = "UTF-8")  #docs with all three authors
+```
+
+```{r}
+#extract author/document data for later use
+get_author <- function(doc_list){
+  author <- grep('SHAKESPEARE_No.|DE_VERE_No.|BACON_No.', doc_list, value = TRUE)
+  author <- gsub(":", "", author)
+  author <- trimws(author)
+  return(author)
+}
+```
+
+```{r}
+### SEPARATE THE DOCUMENTS PER AUTHOR###
+
+sep_by_author <- function(raw_text){
+  #define the title
+  author_title <- grep("SHAKESPEARE_No.|DE_VERE_No.|BACON_No.", raw_text)
+  
+  #define document body per doc using title and end_doc
+  doc_end <- c(author_title -1, length(raw_text))
+  doc_end <- doc_end[-1]
+  
+  #separate the documents using the start and end index
+  text <- mapply(function(db, de) paste(raw_text[db:de], collapse = "\n"), author_title, doc_end)
+  
+  #assign the output to the new variable
+  return(text)
+}
+```
+
+```{r}
+### CLEAN UP THE TEXT ###
+text_clean <- function(doc_list){
+  #replace newline characters with spaces
+  doc_list <- gsub("[\r\n]", " ", doc_list)
+  
+  #set all words to lowercase
+  doc_list <- tolower(doc_list)
+  
+  #remove symbols that didn't convert to utf-8 properly
+  doc_list <- iconv(doc_list, "latin1", "ASCII", sub="")
+  
+  #additional stop words
+  addl_words <- c('julius', 'caesar', 'octavius', 'augustus', 'mark', 'antony', 'lepidus', 'marcus', 'brutus', 'cassius', 'casca',
+                  'trebonius', 'caius', 'ligarius', 'decius', 'metellus cimber', 'cinna', 'calpurnia', 'portia', 'cicero',
+                  'popilius', 'lena', 'flavius', 'marullus', 'cato', 'lucilius', 'titinius', 'messala', 'volumnius','artemidorus',
+                  'varro', 'clitus', 'claudio', 'strato', 'lucius', 'dardanius', 'pindarus', 'macbeth', 'richard', 'art', 'can',
+                  'doth', 'dost', '\'ere', 'hast', 'hath', 'hence', 'hither', 'nigh', 'oft', 'should\'st', 'thither', 'tither',
+                  'thee', 'thou', 'thine', 'thy', '\'tis', '\'twas', 'wast', 'whence', 'wherefore', 'whereto', 'will', 'withal',
+                  'would\'st', 'ye', 'yon', 'yonder', 'lordship', 'come', 'hamlet', 'cause', 'also', 'use', 'said', 'see','other',
+                  'say', 'exeunt', 'ham', 'man', 'men', 'shall')
+  #remove all stop words
+  doc_list <- removeWords(doc_list, c(stopwords("english"), addl_words))
+  
+  #retain Elizabethan stemmed words
+  doc_list <- gsub("\'d", "ed", doc_list)
+  
+  #remove titles that include author names
+  doc_list <- gsub("shakespeare_no.", "", doc_list)
+  doc_list <- gsub("de_vere_no.", "", doc_list)
+  doc_list <- gsub("bacon_no.", "", doc_list)
+  
+  #remove whitespace
+  doc_list <- trimws(doc_list)
+  
+  return(doc_list)
+}
+```
+
+```{r}
+### RUN THE ABOVE FUNCTIONS ON THE DATA ###
+
+sb_authors <- get_author(sb)
+sv_authors <- get_author(sv)
+svb_authors <- get_author(svb)
+
+sb <- sep_by_author(sb)
+sv <- sep_by_author(sv)
+svb <- sep_by_author(svb)
+
+sb <- text_clean(sb)
+sv <- text_clean(sv)
+svb <- text_clean(svb)
+```
+
+SECTION 2: Set up data for exploration
+```{r}
+### CREATE THE CORPUS FOR THE CHOSEN AUTHORS###
+ws_corpus <- VCorpus(VectorSource(svb))
+```
+
+```{r}
+### NORMALIZE THE CORPUS ###
+
+#var to capture the number of documents
+(numdocs <- length(ws_corpus))
+
+#minimum and maximum term frequencies
+minFreq <- numdocs * 0.001
+maxFreq <- numdocs * 1
+```
+
+```{r}
+### CREATE A TERM DOCUMENT MATRIX ###
+ws_dtm <- DocumentTermMatrix(ws_corpus,
+                            control = list(
+                            removePunctuation = T,
+                            wordLengths = c(3,15),
+                            stemming = T,
+                            removeNumbers = T,
+                            remove_separators = T,
+                            bounds = list(global = c(minFreq, maxFreq))))
+#turn the document term matrix into a matrix
+ws_matrix <- as.matrix(ws_dtm)
+
+#provide row names to match documents per row (ENTER THE CORRECT AUTHOR LIST)
+row.names(ws_matrix) <- svb_authors
+```
+
+SECTION 3: Data Discovery
+```{r}
+### DATA DISCOVERY ###
+
+#view number of words per author
+
+#tdm data frame (ENTER THE CORRECT AUTHOR LIST))
+ws_df <- data.frame(ws_matrix)
+ws_df$author <- gsub("_No.*", "", svb_authors)
+
+#get the author column name
+author_col <- match('author', names(ws_df))
+
+#Rearrange the columns to put author in the first row
+ws_df <- subset(ws_df, select=c(author_col,1:(author_col - 1),(author_col + 1):length(ws_df)))
+
+#Add a totals column for row totals
+ws_df$totals <- rowSums(ws_df[,2:length(ws_df)])
+
+#summarize word count per author
+author_words <- ws_df %>%
+  group_by(author) %>%
+  summarise(sum(totals))
+
+colnames(author_words) <- c('author', 'wordcount')
+
+author_words
+```
+
+```{r}
+#summarize words per piece
+piece_words <- ws_df %>%
+  group_by(row.names(ws_df)) %>%
+  summarise(sum(totals))
+
+piece_words
+```
+
+```{r}
+#get the average word count per document
+summary(piece_words$'sum(totals)')
+```
+
+
+```{r}
+#view words with a frequency >= 10
+(top_words <- colnames(ws_matrix[, which(colSums(ws_matrix)>=100)]))
+```
+
+```{r}
+#Word cloud setup
+
+#transform the matrix in into a data frame
+library(wordcloud)
+
+wc_tdm <- TermDocumentMatrix(ws_corpus,
+                             control = list(
+                               removePunctuation = T,
+                               wordLengths = c(3,18),
+                               #stemming = T,
+                               removeNumbers = T,
+                               remove_separators = T,
+                               bounds = list(global = c(minFreq, maxFreq))
+                                ))
+wc_m <- as.matrix(wc_tdm)
+wc_filter <- sort(rowSums(wc_m),decreasing=TRUE)
+wc_df <- data.frame(word = names(wc_filter),freq=wc_filter)
+
+set.seed(177)
+wordcloud(words = wc_df$word, freq = wc_df$freq, min.freq = 3,
+          max.words=70, random.order=FALSE, rot.per=0.35, 
+          colors=brewer.pal(8, "Dark2"))
+```
+
+```{r}
+#view some word associations for the top three words
+(time_assoc <- data.frame(findAssocs(wc_tdm, terms = "time", corlimit = 0.4)))
+```
+```{r}
+(love_assoc <- data.frame(findAssocs(wc_tdm, terms = "love", corlimit = 0.4)))
+```
+```{r}
+(good_assoc <- data.frame(findAssocs(wc_tdm, terms = "good", corlimit = 0.4)))
+```
+
+```{r}
+### BUILD A TRAINING AND TEST SET ###
+library(caret)
+library(rpart)
+library(e1071)
+
+#function to pull a data sample given a data frame
+sample_index <- function(df){
+  df_index <- seq(1,nrow(df),4)
+  return(df_index)
+}
+
+#make a test indexer
+test_index <- sample_index(ws_df)
+
+#assign the test indexer rows to test and everything else to train
+ws_train <-ws_df[-test_index,]
+ws_test <- ws_df[test_index,]
+
+#remove totals row from data frames
+ws_train <- subset(ws_train, select = -c(totals))
+ws_test <- subset(ws_test, select = -c(totals))
+
+#remove author from the test set
+ws_test_noauthor <- subset(ws_test, select = -c(author))
+```
+
+Build a Decision Tree Model
+```{r}
+library(rattle)
+#train the machine to try predicting the document based on words used by each author
+dt_model <- train(author ~.,
+                  data = ws_train,
+                  metric = 'Accuracy',
+                  method = 'rpart')
+                  
+#view the decision tree
+fancyRpartPlot(dt_model$finalModel)
+```
+
+Use the Decision Tree Model to Identify Authors from the Test Set
+```{r}
+dt_predict <- predict(dt_model, ws_test_noauthor, type = 'raw')
+dt_confusionMatrix <- confusionMatrix(dt_predict, as.factor(ws_test$author))
+dt_confusionMatrix
+```
+
+Train on the K Means Algorithm to Attempt ML Separation by Author
+```{r}
+#
+library(factoextra)
+
+#create wc_weighted dtm to plot with k-means by word clustering
+wc_weighted_tdm <- weightTfIdf(wc_tdm, normalize = "False")
+wc_weighted_tdm <- as.matrix(wc_weighted_tdm)
+
+#create ws_weighted dtm to plot with k-means by author
+ws_weighted_dtm <- weightTfIdf(ws_dtm, normalize = "False")
+ws_weighted_dtm <- as.matrix(ws_weighted_dtm)
+
+#the first k-means separator uses the wordcloud matrix to 
+k1 <- kmeans(wc_m, centers = 3, iter.max = 50, nstart = 3) #kmeans by word with no weighting
+k2 <- kmeans(wc_weighted_tdm, centers = 3, iter.max = 50, nstart = 3) #kmeans by word with tf-idf weighting
+
+k3 <- kmeans(ws_matrix, centers = 3, iter.max = 50, nstart = 3) #kmeans by author with no weighting
+k4 <- kmeans(ws_weighted_dtm, centers = 3, iter.max = 50, nstart = 3) #kmeans by author with weighting
+
+fviz_cluster(k1, wc_m)
+fviz_cluster(k2, wc_weighted_tdm)
+fviz_cluster(k3, ws_matrix)
+fviz_cluster(k4, ws_weighted_dtm)
+```
+
+SVM Model
+```{r}
+#set train and test data authors to factors for nb compliance
+svm_train <- ws_train
+svm_train$author <- as.factor(svm_train$author)
+
+svm_test <- ws_test
+svm_test$author <- as.factor(svm_test$author)
+
+svm_test_noauthor <- subset(svm_test, select = -c(author))
+
+model_svm <- svm(author ~.,
+                 data = svm_train,
+                 kernel = "radial",
+                 cost = 25,
+                 scale = FALSE)
+
+svm_prediction <- predict(model_svm, svm_test_noauthor)
+svm_confusionMatrix <- confusionMatrix(svm_prediction, svm_test$author)
+svm_confusionMatrix
+print(model_svm)
+```
+
+KNN Model
+```{r}
+model_knn <- train(author ~., data = svm_train,
+                   method = "knn",
+                   tuneGrid = data.frame(k = seq(1,10)),
+                   trControl = trainControl(method = 'cv'))
+
+knn_prediction <- predict(model_knn, svm_test_noauthor)
+knn_confusionMatrix <- confusionMatrix(knn_prediction, svm_test$author)
+knn_confusionMatrix
+```
+
+```{r}
+#graph the best amount of neighbors for prediction
+plot(model_knn)
+```
+
